@@ -1,0 +1,37 @@
+- A service that allows users to upload text descriptions of their D&D character and that creates a 3D printable model for them.
+- Service has a website frontend.
+- Service backend is python based.
+- Service uses local models, hosted on AWS (or maybe Azure or Google, doesn't really matter) on-demand.
+- Service performs:
+  1. Use image generation AI to create a front and back image of the character, with some minor prompt injection to make it look like a D&D mini.
+  2. Use a 2d-to-3d model generation AI to create the 3D model (I like Tencent's hunyuan)
+  3. "Thicken" the model, ie make sure there are no areas that are too thin to print properly.
+  4. Allow model for download
+
+We'll need to do a bunch of steps to get here, I imagine something like:
+
+Step 1:
+
+Create a dummy website for me to host, with a single "generate" button.
+
+Step 2:
+
+Create and host a cloud service that uses a local image model to create some image, and hook that up to our "generate" button. Needs to be lean, so some on-demand server seems like the way to go, probably using a docker image? Not sure I am not an expert webdev.
+
+Step 3:
+
+A second service to generate a 3d model, at this stage can just use a preset image and generate the model when pressing "generate".
+
+Step 4:
+
+Combine both services so that the generate button creates two images (back and front view, can use a fixed prompt for now for what the image should be), then creates the model from those and allows the user to download that.
+
+Step 5:
+
+Integrate the workflow of the user being able to type their description in a textbox and the models using that to generate the model, as well as some nicer UI on the website (a 3D view would be cool).
+
+Step 6:
+
+Add another step to the pipeline for thickening the model. This could be a rather complicated procedure so we should be able to iterate on it locally before turning it into another cloud service.
+
+I think that's about it?
