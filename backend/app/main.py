@@ -1,30 +1,38 @@
+import asyncio
 import base64
 import io
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import torch
-from diffusers import StableDiffusionXLPipeline
+import trimesh
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from PIL import Image
 from pydantic import BaseModel
 
-pipeline = None
+pipeline_3d = None
+
+ASSETS_DIR = Path(__file__).parent / "assets"
+PRESET_IMAGE = ASSETS_DIR / "preset.png"
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global pipeline
-    print("Loading SDXL pipeline (this may download ~6.5GB on first run)...")
-    pipeline = StableDiffusionXLPipeline.from_pretrained(
-        "stabilityai/stable-diffusion-xl-base-1.0",
+    global pipeline_3d
+    from hy3dgen.shapegen import Hunyuan3DDiTFlowMatchingPipeline
+
+    print("Loading Hunyuan3D-2mini pipeline (downloads ~3-5GB on first run)...")
+    pipeline_3d = Hunyuan3DDiTFlowMatchingPipeline.from_pretrained(
+        "tencent/Hunyuan3D-2mini",
+        subfolder="hunyuan3d-dit-v2-mini",
         torch_dtype=torch.float16,
-        variant="fp16",
         use_safetensors=True,
     )
-    pipeline.to("cuda")
-    print("SDXL pipeline loaded and ready.")
+    pipeline_3d.to("cuda")
+    print("Hunyuan3D-2mini pipeline loaded and ready.")
     yield
-    del pipeline
+    del pipeline_3d
     torch.cuda.empty_cache()
 
 
@@ -37,12 +45,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-PROMPT = (
-    "a highly detailed D&D tabletop miniature figure, painted, "
-    "heroic fantasy character, dramatic pose, studio lighting, "
-    "white background, product photography, 8k"
-)
-
 
 class GenerateRequest(BaseModel):
     description: str = ""
@@ -50,15 +52,40 @@ class GenerateRequest(BaseModel):
 
 @app.post("/generate")
 async def generate(req: GenerateRequest):
-    image = pipeline(
-        prompt=PROMPT,
-        num_inference_steps=30,
-        width=1024,
-        height=1024,
-    ).images[0]
+    return {"status": "error", "message": "SDXL not loaded in Step 3. Use /generate-3d instead."}
+
+
+def _run_shape_generation():
+    """Run Hunyuan3D shape generation synchronously (called via executor)."""
+    image = Image.open(PRESET_IMAGE).convert("RGB")
+
+    mesh_output = pipeline_3d(image=image)
+
+    if hasattr(mesh_output, "mesh") and mesh_output.mesh is not None:
+        mesh = mesh_output.mesh
+    elif isinstance(mesh_output, list) and len(mesh_output) > 0:
+        mesh = mesh_output[0]
+    else:
+        mesh = mesh_output
+
+    # Convert to trimesh if it's not already
+    if not isinstance(mesh, trimesh.Trimesh):
+        if hasattr(mesh, "vertices") and hasattr(mesh, "faces"):
+            import numpy as np
+            mesh = trimesh.Trimesh(
+                vertices=np.array(mesh.vertices),
+                faces=np.array(mesh.faces),
+            )
+        else:
+            raise ValueError(f"Unexpected mesh output type: {type(mesh)}")
 
     buffer = io.BytesIO()
-    image.save(buffer, format="PNG")
-    img_base64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
+    mesh.export(buffer, file_type="stl")
+    return base64.b64encode(buffer.getvalue()).decode("utf-8")
 
-    return {"status": "ok", "image": img_base64}
+
+@app.post("/generate-3d")
+async def generate_3d():
+    loop = asyncio.get_event_loop()
+    glb_base64 = await loop.run_in_executor(None, _run_shape_generation)
+    return {"status": "ok", "model": glb_base64}

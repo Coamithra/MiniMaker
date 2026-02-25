@@ -5,6 +5,10 @@ export default defineConfig({
   plugins: [react()],
   server: {
     proxy: {
+      "/generate-3d": {
+        target: "http://localhost:8000",
+        timeout: 300000,
+      },
       "/generate": {
         target: "http://localhost:8000",
         timeout: 120000,
