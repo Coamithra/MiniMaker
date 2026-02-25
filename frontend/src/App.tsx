@@ -1,52 +1,36 @@
 import { useState } from "react";
 
 function App() {
-  const [imageData, setImageData] = useState<string | null>(null);
+  const [description, setDescription] = useState("");
+  const [modelData, setModelData] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [status, setStatus] = useState<string | null>(null);
 
-  const [modelData, setModelData] = useState<string | null>(null);
-  const [loading3D, setLoading3D] = useState(false);
-
-  async function handleGenerate() {
+  async function handleGenerateMiniature() {
     setLoading(true);
-    setImageData(null);
-    setError(null);
-    try {
-      const res = await fetch("/generate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ description: "" }),
-      });
-      const data = await res.json();
-      if (data.image) {
-        setImageData(data.image);
-      } else {
-        setError("No image returned from server.");
-      }
-    } catch {
-      setError("Error connecting to backend.");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function handleGenerate3D() {
-    setLoading3D(true);
     setModelData(null);
     setError(null);
+    setStatus("Generating your miniature... This takes ~2-3 minutes.");
     try {
-      const res = await fetch("/generate-3d", { method: "POST" });
+      const res = await fetch("/generate-miniature", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ description }),
+      });
       const data = await res.json();
       if (data.model) {
         setModelData(data.model);
+        setStatus(null);
       } else {
-        setError("No 3D model returned from server.");
+        setError(data.message || "No 3D model returned from server.");
+        setStatus(null);
       }
     } catch {
       setError("Error connecting to backend.");
+      setStatus(null);
     } finally {
-      setLoading3D(false);
+      setLoading(false);
     }
   }
 
@@ -56,43 +40,32 @@ function App() {
       <p style={{ color: "#666" }}>Describe your D&amp;D character and generate a 3D-printable miniature.</p>
 
       <textarea
-        disabled
+        value={description}
+        onChange={(e) => setDescription(e.target.value)}
         placeholder="A fierce half-orc barbarian wielding a greataxe..."
         rows={4}
         style={{ width: "100%", boxSizing: "border-box", padding: 8, fontSize: 14 }}
       />
 
-      <div style={{ display: "flex", gap: 12, marginTop: 12 }}>
+      <div style={{ marginTop: 12 }}>
         <button
-          onClick={handleGenerate}
-          disabled={loading}
+          onClick={handleGenerateMiniature}
+          disabled={!description.trim() || loading}
           style={{ padding: "8px 24px", fontSize: 14, cursor: "pointer" }}
         >
-          {loading ? "Generating..." : "Generate Image"}
-        </button>
-
-        <button
-          onClick={handleGenerate3D}
-          disabled={loading3D}
-          style={{ padding: "8px 24px", fontSize: 14, cursor: "pointer" }}
-        >
-          {loading3D ? "Generating 3D..." : "Generate 3D"}
+          {loading ? "Generating..." : "Generate Miniature"}
         </button>
       </div>
+
+      {status && (
+        <div style={{ marginTop: 24, padding: 16, color: "#1565c0", background: "#e3f2fd", borderRadius: 4 }}>
+          {status}
+        </div>
+      )}
 
       {error && (
         <div style={{ marginTop: 24, padding: 16, color: "#d32f2f", background: "#fdecea", borderRadius: 4 }}>
           {error}
-        </div>
-      )}
-
-      {imageData && (
-        <div style={{ marginTop: 24 }}>
-          <img
-            src={`data:image/png;base64,${imageData}`}
-            alt="Generated D&D miniature"
-            style={{ width: "100%", borderRadius: 4 }}
-          />
         </div>
       )}
 
