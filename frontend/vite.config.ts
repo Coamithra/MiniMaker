@@ -5,7 +5,10 @@ export default defineConfig({
   plugins: [react()],
   server: {
     proxy: {
-      "/generate": "http://localhost:8000",
+      "/generate": {
+        target: "http://localhost:8000",
+        timeout: 120000,
+      },
     },
   },
 });

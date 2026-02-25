@@ -1,12 +1,14 @@
 import { useState } from "react";
 
 function App() {
-  const [result, setResult] = useState<string | null>(null);
+  const [imageData, setImageData] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
   async function handleGenerate() {
     setLoading(true);
-    setResult(null);
+    setImageData(null);
+    setError(null);
     try {
       const res = await fetch("/generate", {
         method: "POST",
@@ -14,9 +16,13 @@ function App() {
         body: JSON.stringify({ description: "" }),
       });
       const data = await res.json();
-      setResult(data.message);
+      if (data.image) {
+        setImageData(data.image);
+      } else {
+        setError("No image returned from server.");
+      }
     } catch {
-      setResult("Error connecting to backend");
+      setError("Error connecting to backend.");
     } finally {
       setLoading(false);
     }
@@ -42,9 +48,19 @@ function App() {
         {loading ? "Generating..." : "Generate"}
       </button>
 
-      {result && (
-        <div style={{ marginTop: 24, padding: 16, background: "#f4f4f4", borderRadius: 4 }}>
-          <strong>Result:</strong> {result}
+      {error && (
+        <div style={{ marginTop: 24, padding: 16, color: "#d32f2f", background: "#fdecea", borderRadius: 4 }}>
+          {error}
+        </div>
+      )}
+
+      {imageData && (
+        <div style={{ marginTop: 24 }}>
+          <img
+            src={`data:image/png;base64,${imageData}`}
+            alt="Generated D&D miniature"
+            style={{ width: "100%", borderRadius: 4 }}
+          />
         </div>
       )}
     </div>
