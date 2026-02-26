@@ -14,6 +14,10 @@ omegaconf
 einops
 opencv-python
 
+# Mesh thickening deps (CPU-only post-processing)
+scipy
+rtree
+
 # hy3dgen (Hunyuan3D-2) requires manual install:
 #   git clone https://github.com/Tencent/Hunyuan3D-2 C:/Programming/Hunyuan3D-2
 #   pip install -e C:/Programming/Hunyuan3D-2

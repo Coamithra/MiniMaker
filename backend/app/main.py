@@ -4,6 +4,7 @@ import functools
 import io
 from contextlib import asynccontextmanager
 
+import numpy as np
 import torch
 import trimesh
 from fastapi import FastAPI
@@ -57,6 +58,95 @@ def _pil_to_b64(image: Image.Image) -> str:
 
 def _b64_to_pil(b64: str) -> Image.Image:
     return Image.open(io.BytesIO(base64.b64decode(b64))).convert("RGB")
+
+
+# --- Step 6: Mesh thickening for 3D printability ---
+
+def _thicken_mesh(
+    mesh: trimesh.Trimesh,
+    min_thickness: float | None = None,
+) -> trimesh.Trimesh:
+    """Thicken thin regions of a mesh by inflating vertices outward along normals.
+
+    Uses a KD-tree to find, for each vertex, the nearest "opposite-facing"
+    vertex (one whose normal points back toward it). The distance to that
+    vertex approximates local wall thickness. Thin vertices are then pushed
+    outward along their normals to meet the minimum thickness.
+
+    Preserves original mesh topology and detail — no voxel round-trip.
+    """
+    from scipy.spatial import cKDTree
+
+    # Auto-calculate min thickness: 1.5% of the longest bounding box axis.
+    # For a 60mm mini this is ~0.9mm — a reasonable 3D-print wall minimum.
+    if min_thickness is None:
+        min_thickness = max(mesh.bounding_box.extents) * 0.015
+
+    print(f"[Thicken] Min thickness target: {min_thickness:.4f}")
+    print(f"[Thicken] Mesh: {len(mesh.vertices)} verts, {len(mesh.faces)} faces")
+
+    vertices = mesh.vertices.copy()
+    normals = mesh.vertex_normals.copy()
+
+    # Build KD-tree over all vertices
+    print("[Thicken] Building KD-tree and measuring thickness...")
+    tree = cKDTree(vertices)
+
+    # For each vertex, query nearby neighbors within a search radius.
+    # We only need to search up to min_thickness — anything farther is
+    # already thick enough.
+    search_radius = min_thickness
+    neighbors = tree.query_ball_point(vertices, r=search_radius, workers=-1)
+
+    thickness = np.full(len(vertices), np.inf)
+    for i, nbr_indices in enumerate(neighbors):
+        if len(nbr_indices) <= 1:
+            continue
+        nbr_idx = np.array(nbr_indices)
+        # Filter to neighbors that are truly "across the wall":
+        # 1. The vector to the neighbor must point inward (against our normal)
+        # 2. The neighbor's own normal must also point back toward us
+        # Both conditions must hold to avoid false positives from surface
+        # folds, creases, and adjacent geometry on the same side.
+        to_nbr = vertices[nbr_idx] - vertices[i]
+        dists = np.linalg.norm(to_nbr, axis=1)
+        # Skip self and very close neighbors on the same surface patch
+        far_enough = dists > min_thickness * 0.1
+        if not far_enough.any():
+            continue
+        sub_idx = nbr_idx[far_enough]
+        to_nbr_unit = to_nbr[far_enough] / dists[far_enough, np.newaxis]
+        dists = dists[far_enough]
+        # Check 1: neighbor is in inward direction (behind our surface)
+        inward_dots = to_nbr_unit @ normals[i]
+        # Check 2: neighbor's normal points back toward us (opposing face)
+        nbr_normal_dots = np.sum(normals[sub_idx] * normals[i], axis=1)
+        across_mask = (inward_dots < -0.3) & (nbr_normal_dots < 0.0)
+        if not across_mask.any():
+            continue
+        thickness[i] = dists[across_mask].min()
+
+    # Find thin vertices and compute how much to push them out
+    thin_mask = thickness < min_thickness
+    thin_count = thin_mask.sum()
+    print(f"[Thicken] Found {thin_count} thin vertices "
+          f"({100 * thin_count / len(vertices):.1f}% of mesh)")
+
+    if thin_count == 0:
+        print("[Thicken] No thin regions found, returning original mesh.")
+        return mesh
+
+    # Push each thin vertex outward by half the deficit (both sides of the
+    # wall contribute, so each vertex only needs to move half the difference)
+    deficit = min_thickness - thickness[thin_mask]
+    displacement = deficit * 0.5
+    vertices[thin_mask] += normals[thin_mask] * displacement[:, np.newaxis]
+
+    thickened = trimesh.Trimesh(vertices=vertices, faces=mesh.faces.copy())
+
+    print(f"[Thicken] Done. Displaced {thin_count} vertices, "
+          f"max displacement: {displacement.max():.4f}")
+    return thickened
 
 
 # --- Step 5 helpers ---
@@ -181,13 +271,16 @@ def _run_mv_shape_generation(front_b64: str, back_b64: str) -> str:
         else:
             raise ValueError(f"Unexpected mesh output type: {type(mesh)}")
 
+    del pipeline_3d
+    torch.cuda.empty_cache()
+    print("[Hunyuan3D-2mv] Pipeline unloaded, VRAM freed.")
+
+    mesh = _thicken_mesh(mesh)
+
     buffer = io.BytesIO()
     mesh.export(buffer, file_type="stl")
     stl_b64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
 
-    del pipeline_3d
-    torch.cuda.empty_cache()
-    print("[Hunyuan3D-2mv] Pipeline unloaded, VRAM freed.")
     return stl_b64
 
 
@@ -280,13 +373,15 @@ def _run_shape_generation_from_image(image: Image.Image) -> str:
         else:
             raise ValueError(f"Unexpected mesh output type: {type(mesh)}")
 
-    buffer = io.BytesIO()
-    mesh.export(buffer, file_type="stl")
-    stl_b64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
-
     del pipeline_3d
     torch.cuda.empty_cache()
     print("[Hunyuan3D] Pipeline unloaded, VRAM freed.")
+
+    mesh = _thicken_mesh(mesh)
+
+    buffer = io.BytesIO()
+    mesh.export(buffer, file_type="stl")
+    stl_b64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
 
     return stl_b64
 
